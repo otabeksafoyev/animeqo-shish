@@ -1,9 +1,8 @@
 {
   "channelId": "@Sakuramibacent",
-  "currentId": "21",
+  "currentId": "",
   "startPart": 1,
-  "endPart": 12,
-  "currentPart": 2,
-  "announceLink": "https://t.me/Buxoro_Texnika_savdosi",
-  "mode": "waiting_videos"
+  "endPart": 0,
+  "currentPart": 0,
+  "mode": "idle"
 }

@@ -1,61 +1,62 @@
 // bot.js
 // Telegram bot — videolarni seriya sifatida kanalga yuklash va elon tashlash
-// 2025–2026 versiya | boshlang'ich va oxirgi qism raqamini tanlash imkoni bilan, kanal tanlash va elon funksiyasi qo'shilgan
+// Yangilangan: Elon captionidagi barcha t.me linklari kanal linkiga almashtiriladi
 
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 
 // ────────────────────────────────────────────────
-// BU YERDA O'Z MA'LUMOTlaringizNI KIRITING
+// O'Z MA'LUMOTlaringizNI BU YERDA KIRITING
 // ────────────────────────────────────────────────
-const BOT_TOKEN = '8431728057:AAFxvs9LUrHNfA4eWFmqQY52T6-DTuhibjg'; // ← BOT TOKEN
-const ADMIN_ID = 8173188671; // ← SIZNING TELEGRAM ID'ingiz
-const DEFAULT_CHANNEL_ID = '@kinochidb'; // Boshlang'ich kanal, agar saqlanmagan bo'lsa
+const BOT_TOKEN = '8431728057:AAFxvs9LUrHNfA4eWFmqQY52T6-DTuhibjg';
+const ADMIN_ID = 8173188671;
+const DEFAULT_CHANNEL_ID = '@kinochidb';
 
 // ────────────────────────────────────────────────
-// PASTKI KODNI O'ZGARTIRMANG (agar kerak bo'lmasa)
+// PASTKI KODNI O'ZGARTIRMANG (agar chindan kerak bo'lmasa)
 // ────────────────────────────────────────────────
 
 if (!BOT_TOKEN || !ADMIN_ID) {
-  console.error('\n❌ Kod ichidagi BOT_TOKEN yoki ADMIN_ID to‘ldirilmagan!');
-  console.error('Iltimos, yuqoridagi 2 ta o‘zgaruvchini to‘g‘ri to‘ldiring.\n');
+  console.error('\n❌ BOT_TOKEN yoki ADMIN_ID to‘ldirilmagan!\n');
   process.exit(1);
 }
 
 console.log(`Bot ishga tushdi | Admin: ${ADMIN_ID}`);
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-let botId = null; // Botning o'z ID'si
+let botId = null;
 
 bot.getMe().then(me => {
   botId = me.id;
   console.log(`Bot ID: ${botId}`);
 }).catch(err => {
-  console.error('Bot haqida ma\'lumot olishda xato:', err);
+  console.error('Bot ID olishda xato:', err);
   process.exit(1);
 });
 
 const DATA_FILE = 'data.json';
+
 let state = {
   channelId: DEFAULT_CHANNEL_ID,
   currentId: '',
   startPart: 1,
   endPart: 0,
   currentPart: 0,
-  announceLink: '',
-  mode: 'idle' // idle | waiting_channel_choice | waiting_new_channel | waiting_id | waiting_start | waiting_end | waiting_videos | waiting_announce_link | waiting_announces
+  mode: 'idle'
 };
 
-function load() {
+function loadState() {
   if (fs.existsSync(DATA_FILE)) {
     try {
       Object.assign(state, JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8')));
       console.log('Oldingi holat yuklandi');
-    } catch {}
+    } catch (e) {
+      console.error('data.json o‘qishda xato:', e.message);
+    }
   }
 }
 
-function save() {
+function saveState() {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify({
       channelId: state.channelId,
@@ -63,43 +64,61 @@ function save() {
       startPart: state.startPart,
       endPart: state.endPart,
       currentPart: state.currentPart,
-      announceLink: state.announceLink,
       mode: state.mode
     }, null, 2));
-  } catch {}
+  } catch (e) {
+    console.error('data.json saqlashda xato:', e.message);
+  }
 }
 
-load();
+loadState();
 
-// ───────────── Buyruqlar ─────────────
+// ───────────── Buyruqlar va tugmalar ─────────────
 
-// /start buyrug'i — buttonlar chiqarish
 bot.onText(/\/start/i, (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
 
-  const keyboard = {
+  bot.sendMessage(msg.chat.id, 'Xush kelibsiz! Nima qilamiz?', {
     reply_markup: {
       keyboard: [
         ['Add ID'],
-        ['Elon tashlash']
+        ['Change Channel'],
+        ['Elon tashlash'],
+        ['Bekor qilish']
       ],
-      resize_keyboard: true,
-      one_time_keyboard: false
+      resize_keyboard: true
     }
-  };
-
-  bot.sendMessage(msg.chat.id, 'Xush kelibsiz! Funksiyani tanlang:', keyboard);
+  });
 });
 
-// Umumiy message handler
+bot.onText(/\/addid/i, (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  startAddSeries(msg.chat.id);
+});
+
+bot.onText(/\/elon/i, (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  startAnnounce(msg.chat.id);
+});
+
+bot.onText(/\/cancel|\/bekor/i, (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  resetState(msg.chat.id);
+});
+
 bot.on('message', (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
   const cid = msg.chat.id;
-  const text = msg.text ? msg.text.trim() : '';
+  const text = (msg.text || '').trim();
 
-  // Buttonlar orqali funksiyalar
+  // Tugmalar
   if (text === 'Add ID') {
-    const keyboard = {
+    startAddSeries(cid);
+    return;
+  }
+
+  if (text === 'Change Channel') {
+    bot.sendMessage(cid, `Hozirgi kanal: ${state.channelId}\nQaysi kanal bilan ishlaymiz?`, {
       reply_markup: {
         keyboard: [
           ['Avvalgi kanal'],
@@ -108,172 +127,173 @@ bot.on('message', (msg) => {
         resize_keyboard: true,
         one_time_keyboard: true
       }
-    };
-    bot.sendMessage(cid, `Hozirgi kanal: ${state.channelId}\nAvvalgi kanalda qolasizmi yoki yangisini tanlaysizmi?`, keyboard);
+    });
     state.mode = 'waiting_channel_choice';
-    save();
+    saveState();
     return;
-  } else if (text === 'Elon tashlash') {
-    if (!state.announceLink) {
-      bot.sendMessage(cid, 'Avval linkni kiriting (masalan: https://t.me/joinchat/AAAAAEvwxYIEk9QmDCGMNw)');
-      state.mode = 'waiting_announce_link';
-      save();
-      return;
-    } else {
-      bot.sendMessage(cid, 'Endi elon rasmi va matnini yuboring (photo + caption shaklida).');
-      state.mode = 'waiting_announces';
-      save();
-      return;
-    }
   }
 
-  // Kanal tanlash jarayoni
+  if (text === 'Elon tashlash') {
+    startAnnounce(cid);
+    return;
+  }
+
+  if (text === 'Bekor qilish') {
+    resetState(cid);
+    return;
+  }
+
+  // ─── Rejimlar bo‘yicha ishlov ───
+
   if (state.mode === 'waiting_channel_choice') {
     if (text === 'Avvalgi kanal') {
-      bot.sendMessage(cid, `OK, avvalgi kanal (${state.channelId}) da davom etamiz.\nID ni yuboring (masalan: uuid, anime nomi, serial kodi...)`);
-      state.mode = 'waiting_id';
-      save();
-      return;
+      bot.sendMessage(cid, `OK, ${state.channelId} da davom etamiz.\n/start bilan bosh menyuga qaytishingiz mumkin.`);
+      state.mode = 'idle';
+      saveState();
     } else if (text === 'Yangi kanal') {
-      bot.sendMessage(cid, 'Yangi kanal linkini yuboring (masalan: @channelname yoki -1001234567890)');
+      bot.sendMessage(cid, 'Yangi kanal @username yoki -100XXXXXXXX shaklida yuboring:');
       state.mode = 'waiting_new_channel';
-      save();
-      return;
+      saveState();
     } else {
-      bot.sendMessage(cid, 'Iltimos, buttonlardan birini bosing.');
-      return;
+      bot.sendMessage(cid, 'Iltimos, tugmalardan birini tanlang.');
     }
-  }
-
-  // Yangi kanal qabul qilish va tekshirish
-  if (state.mode === 'waiting_new_channel' && text) {
-    const newChannelId = text.startsWith('@') ? text : text; // @ yoki raqamli ID
-    // Bot admin ekanligini tekshirish
-    bot.getChatMember(newChannelId, botId).then(member => {
-      if (member.status === 'administrator') {
-        state.channelId = newChannelId;
-        bot.sendMessage(cid, `✅ Yangi kanal (${state.channelId}) qabul qilindi va bot admin ekanligi tasdiqlandi.\nEndi ID ni yuboring.`);
-        state.mode = 'waiting_id';
-        save();
-      } else {
-        bot.sendMessage(cid, '❌ Bot bu kanalda admin emas. Avval botni admin qilib qo\'shing va qaytadan urinib ko\'ring.');
-      }
-    }).catch(err => {
-      console.error(err);
-      bot.sendMessage(cid, 'Kanalni tekshirishda xato: ' + err.message + '\nTo\'g\'ri ID yoki @channelname kiriting.');
-    });
     return;
   }
 
-  // Add ID jarayoni (avvalgi kabi)
-  // 1. ID kiritish
+  if (state.mode === 'waiting_new_channel' && text) {
+    const newId = text;
+    bot.getChatMember(newId, botId)
+      .then(member => {
+        if (['administrator', 'creator'].includes(member.status)) {
+          state.channelId = newId;
+          bot.sendMessage(cid, `✅ Kanal o‘zgartirildi: ${state.channelId}\nBot admin tasdiqlandi.`);
+          state.mode = 'idle';
+          saveState();
+        } else {
+          bot.sendMessage(cid, '❌ Bot bu kanalda admin emas. Avval admin qilib qo‘shing.');
+        }
+      })
+      .catch(err => {
+        bot.sendMessage(cid, `Xato: ${err.message}\nTo‘g‘ri kanal ID yoki @username kiriting.`);
+      });
+    return;
+  }
+
+  // Seriya qo‘shish jarayoni
   if (state.mode === 'waiting_id' && text) {
     state.currentId = text;
     state.mode = 'waiting_start';
-    bot.sendMessage(cid, 'Qaysi raqamdan boshlaymiz? (masalan: 1 yoki 20)');
-    save();
+    bot.sendMessage(cid, 'Qaysi qismdan boshlaymiz? (masalan: 1)');
+    saveState();
     return;
   }
 
-  // 2. Boshlang'ich qism raqami
   if (state.mode === 'waiting_start' && text) {
     const start = parseInt(text);
     if (!Number.isInteger(start) || start < 1) {
-      bot.sendMessage(cid, 'Iltimos, 1 yoki undan katta butun son kiriting.');
-      return;
+      return bot.sendMessage(cid, 'Iltimos, 1 yoki undan katta butun son kiriting.');
     }
     state.startPart = start;
     state.currentPart = start;
     state.mode = 'waiting_end';
-    bot.sendMessage(cid, 'Qaysi raqam bilan tugatamiz? (masalan: 12 yoki 50)');
-    save();
+    bot.sendMessage(cid, 'Qaysi qism bilan tugatamiz? (masalan: 24)');
+    saveState();
     return;
   }
 
-  // 3. Oxirgi qism raqami
   if (state.mode === 'waiting_end' && text) {
     const end = parseInt(text);
     if (!Number.isInteger(end) || end < state.startPart) {
-      bot.sendMessage(cid, `Oxirgi qism boshlang'ichdan katta bo‘lishi kerak.\nHozirgi start: ${state.startPart}`);
-      return;
+      return bot.sendMessage(cid, `Oxirgi qism startdan katta bo‘lishi kerak (hozir: ${state.startPart}).`);
     }
     state.endPart = end;
     state.mode = 'waiting_videos';
     const total = end - state.startPart + 1;
-    bot.sendMessage(cid, `✅ Seriya boshlandi!\n` +
-      `ID: ${state.currentId}\n` +
-      `Qismlar: ${state.startPart} dan ${state.endPart} gacha (${total} ta)\n\n` +
-      `Endi videolarni ketma-ket yuboring...\n\n` +
-      `Keyingi kutilyapti: ${state.currentPart}-qism`
-    );
-    save();
+    bot.sendMessage(cid, `✅ Seriya boshlandi!\nID: ${state.currentId}\nQismlar: ${state.startPart} – ${end} (${total} ta)\n\nVideolarni ketma-ket yuboring...`);
+    bot.sendMessage(cid, `Keyingi: ${state.currentPart}-qism kutilyapti`);
+    saveState();
     return;
   }
 
-  // 4. Video qabul qilish
-  if (msg.video && state.mode === 'waiting_videos' && state.currentId && state.currentPart <= state.endPart) {
+  // Video yuklash
+  if (msg.video && state.mode === 'waiting_videos' && state.currentPart <= state.endPart) {
     const caption = `ID: ${state.currentId}\nQism: ${state.currentPart}`;
     bot.sendVideo(state.channelId, msg.video.file_id, { caption })
-      .then(() => {
-        bot.sendMessage(cid, `Qism ${state.currentPart} → kanalga yuklandi`);
-      })
+      .then(() => bot.sendMessage(cid, `✔ Qism ${state.currentPart} yuklandi`))
       .catch(err => {
         console.error(err);
-        bot.sendMessage(cid, 'Videoni kanalga yuborib bo‘lmadi.\nBot kanal admin ekanligini tekshiring.');
+        bot.sendMessage(cid, 'Videoni kanalga yuborib bo‘lmadi. Bot adminligini tekshiring.');
       });
+
     state.currentPart++;
-    save();
+    saveState();
+
     if (state.currentPart > state.endPart) {
-      bot.sendMessage(cid, 'Barcha qismlar yuklandi ✅');
+      bot.sendMessage(cid, 'Barcha qismlar yuklandi! ✅\n/start bilan davom eting.');
       state.mode = 'idle';
-      save();
+      saveState();
     } else {
-      bot.sendMessage(cid, `Keyingi kutilyapti: ${state.currentPart}-qism`);
+      bot.sendMessage(cid, `Keyingi: ${state.currentPart}-qism kutilyapti`);
     }
     return;
   }
 
-  // Elon tashlash jarayoni
-  // 1. Link kiritish
-  if (state.mode === 'waiting_announce_link' && text) {
-    if (!text.startsWith('https://t.me/')) {
-      bot.sendMessage(cid, 'Iltimos, to\'g\'ri Telegram linkini kiriting (https://t.me/... shaklida).');
-      return;
-    }
-    state.announceLink = text;
-    bot.sendMessage(cid, `✅ Link saqlandi: ${state.announceLink}\nEndi elon rasmi va matnini yuboring (photo + caption shaklida).`);
-    state.mode = 'waiting_announces';
-    save();
-    return;
-  }
-
-  // 2. Elon qabul qilish (photo + caption)
+  // Elon tashlash — barcha t.me linklari kanal linkiga almashtiriladi
   if (msg.photo && msg.caption && state.mode === 'waiting_announces') {
-    const photoId = msg.photo[msg.photo.length - 1].file_id; // Eng katta rasm
-    let caption = msg.caption;
+    const photoId = msg.photo[msg.photo.length - 1].file_id;
+    let caption = msg.caption.trim();
 
-    // Oxirgi linkni topib, yangisi bilan almashtirish
-    const linkRegex = /https:\/\/t\.me\/[^\s]+$/;
-    caption = caption.replace(linkRegex, state.announceLink);
+    // Kanalning to‘g‘ri havolasini hosil qilish
+    let channelLink = state.channelId;
+    if (state.channelId.startsWith('@')) {
+      channelLink = `https://t.me/${state.channelId.slice(1)}`;
+    } else if (state.channelId.startsWith('-100')) {
+      channelLink = `https://t.me/c/${state.channelId.slice(4)}`;
+    }
+
+    // Caption ichidagi barcha https://t.me/... linklarini kanal linkiga almashtirish
+    caption = caption.replace(
+      /https?:\/\/t\.me\/[^\s]+/gi,
+      channelLink
+    );
 
     bot.sendPhoto(state.channelId, photoId, { caption })
-      .then(() => {
-        bot.sendMessage(cid, 'Elon kanalga yuklandi ✅');
-      })
+      .then(() => bot.sendMessage(cid, 'Elon yuklandi ✅'))
       .catch(err => {
         console.error(err);
-        bot.sendMessage(cid, 'Elonni kanalga yuborib bo‘lmadi.\nBot kanal admin ekanligini tekshiring.');
+        bot.sendMessage(cid, 'Elonni yuborib bo‘lmadi. Bot adminligini tekshiring.');
       });
 
-    // Keyingi elonlarni kutish
-    bot.sendMessage(cid, 'Yana elon yuborishingiz mumkin yoki /start bilan bosh menyuga qayting.');
+    bot.sendMessage(cid, 'Yana elon yuborishingiz mumkin yoki /start bilan menyuga qayting.');
     return;
   }
 
-  // Agar boshqa xabar kelsa va rejim faol bo‘lsa
+  // Noma'lum holatda
   if (state.mode !== 'idle') {
-    bot.sendMessage(cid, 'Hozirgi rejimda to\'g\'ri ma\'lumot kiriting. Agar xato bo\'lsa, /start bilan qaytadan boshlang.');
+    bot.sendMessage(cid, 'Hozirgi rejim uchun to‘g‘ri ma’lumot kiriting.\nAgar chalkash bo‘lsa → /start');
   }
 });
 
-console.log('Bot faol — xabarlarni kutmoqda...');
+function startAddSeries(cid) {
+  bot.sendMessage(cid, `Kanal: ${state.channelId}\n\nSeriya ID sini yuboring (masalan: JujutsuKaisen, UUID, anime123...):`);
+  state.mode = 'waiting_id';
+  saveState();
+}
+
+function startAnnounce(cid) {
+  bot.sendMessage(cid, 'Elon uchun rasm + matn yuboring (caption bilan).\nBarcha t.me linklari avtomatik kanal linkiga o‘zgartiriladi.');
+  state.mode = 'waiting_announces';
+  saveState();
+}
+
+function resetState(cid) {
+  state.mode = 'idle';
+  state.currentId = '';
+  state.startPart = 1;
+  state.endPart = 0;
+  state.currentPart = 0;
+  saveState();
+  bot.sendMessage(cid, 'Barcha jarayonlar bekor qilindi. /start bilan davom eting.');
+}
+
+console.log('Bot ishlamoqda...');
